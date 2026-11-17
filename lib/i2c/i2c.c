@@ -104,6 +104,15 @@ uint8_t i2c_leer_reg(uint8_t dir, uint8_t reg, uint8_t *dato, uint8_t n)
     return e;
 }
 
+void i2c_niveles(uint8_t *sda, uint8_t *scl)
+{
+    TWCR = 0; // pines como entradas con pull-up
+    _delay_us(100);
+    *sda = (PINC >> PC4) & 1;
+    *scl = (PINC >> PC5) & 1;
+    TWCR = (1 << TWEN);
+}
+
 uint8_t i2c_probar(uint8_t dir)
 {
     uint8_t e = i2c_start(0x08);

@@ -18,6 +18,8 @@ void i2c_init(void);
 uint8_t i2c_leer_reg(uint8_t dir, uint8_t reg, uint8_t *dato, uint8_t n);
 // 0 si hay un dispositivo que responde (ACK) en la dirección dir
 uint8_t i2c_probar(uint8_t dir);
+// nivel de SDA y SCL en reposo (con el TWI apagado y pull-ups): 1 = alto, 0 = bajo
+void i2c_niveles(uint8_t *sda, uint8_t *scl);
 
 #ifdef __cplusplus
 }

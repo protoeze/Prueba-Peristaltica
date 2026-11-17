@@ -443,6 +443,17 @@ uint8_t control_diagnostico(void)
     if (u_actual > 0.0f || fabsf(pv) > 30.0f)
         return 0;
 
+    // en reposo las dos líneas tienen que estar en 1 (pull-ups)
+    uint8_t sda, scl;
+    i2c_niveles(&sda, &scl);
+    UART_PRINT("# lineas en reposo: SDA(A4)=");
+    uart_putc(sda ? '1' : '0');
+    UART_PRINT(" SCL(A5)=");
+    uart_putc(scl ? '1' : '0');
+    UART_PRINT("\r\n");
+    if (!sda || !scl)
+        UART_PRINT("# una linea esta en 0: corto a GND, sensor sin alimentacion o cable en otro pin\r\n");
+
     UART_PRINT("# I2C:");
     uint8_t hay = 0, hay_as5600 = 0;
     for (uint8_t d = 0x08; d < 0x78; d++)
