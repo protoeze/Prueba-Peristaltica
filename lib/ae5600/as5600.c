@@ -48,5 +48,20 @@ uint8_t as5600_leer_estado(void)
     return i2c_leer_reg(AS5600_DIR, AS5600_REG_STATUS, &estado, 1);
 }
 
+uint8_t as5600_leer_diag(uint8_t *agc, uint16_t *mag, uint16_t *ang)
+{
+    uint8_t b[3], e;
+    if ((e = as5600_leer_estado()))
+        return e;
+    if ((e = i2c_leer_reg(AS5600_DIR, AS5600_REG_AGC, b, 3))) // AGC, MAGNITUDE alto, bajo
+        return e;
+    *agc = b[0];
+    *mag = ((uint16_t)(b[1] & 0x0F) << 8) | b[2];
+    if ((e = i2c_leer_reg(AS5600_DIR, AS5600_REG_RAW_ANGLE, b, 2)))
+        return e;
+    *ang = ((uint16_t)(b[0] & 0x0F) << 8) | b[1];
+    return 0;
+}
+
 uint32_t as5600_posicion(void) { return pos; }
 uint8_t as5600_estado(void) { return estado; }

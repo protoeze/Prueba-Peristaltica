@@ -31,6 +31,7 @@ void control_get_ganancias(ganancias_t *g);
 void control_calcular_zn_cerrado(float ku, float tu);
 uint8_t control_aplicar_sugerencia(char tipo); // 'z', 'c' o 'k'
 uint8_t control_log_toggle(void);
+uint8_t control_diagnostico(void); // 0 si el motor está girando
 void control_estado(void);
 
 #ifdef __cplusplus

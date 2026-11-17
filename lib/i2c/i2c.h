@@ -7,7 +7,7 @@ extern "C" {
 
 #include <Arduino.h>
 
-#define I2C_FREC 400000UL
+#define I2C_FREC 100000UL // 100 kHz: más tolerante a cables largos, pull-ups débiles y ruido del motor
 #define I2C_OK 0
 #define I2C_ERR_TIMEOUT 1
 #define I2C_ERR_START 2
@@ -16,6 +16,8 @@ extern "C" {
 void i2c_init(void);
 // lee n bytes desde el registro reg del dispositivo dir (7 bits)
 uint8_t i2c_leer_reg(uint8_t dir, uint8_t reg, uint8_t *dato, uint8_t n);
+// 0 si hay un dispositivo que responde (ACK) en la dirección dir
+uint8_t i2c_probar(uint8_t dir);
 
 #ifdef __cplusplus
 }

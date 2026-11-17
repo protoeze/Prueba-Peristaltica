@@ -3,6 +3,7 @@
 #include "uart.h"
 #include "pwm.h"
 #include "as5600.h"
+#include "i2c.h"
 #include "pid.h"
 #include <math.h>
 
@@ -112,7 +113,7 @@ static uint8_t leer_sensor(void)
         return 1;
     }
     if (++errores_sensor >= MAX_ERRORES_SENSOR)
-        declarar_falla(PSTR("sensor AS5600"));
+        declarar_falla(PSTR("se perdio la comunicacion I2C con el AS5600 (cables / ruido del motor)"));
     return 0;
 }
 
@@ -308,8 +309,10 @@ void control_init(void)
         if (e)
             esperar_ms(10);
     }
-    if (e)
-        declarar_falla(PSTR("AS5600 no responde / sin iman"));
+    if (e == AS5600_ERR_IMAN)
+        declarar_falla(PSTR("el AS5600 responde pero no detecta el iman"));
+    else if (e)
+        declarar_falla(PSTR("el AS5600 no responde por I2C (SDA=A4, SCL=A5, VCC, GND)"));
     else
     {
         UART_PRINT("# AS5600 OK\r\n");
@@ -324,7 +327,7 @@ void control_init(void)
     t_sensor_prox = t_ant + TS_SENSOR_MS;
     uart_set_espera(tarea_sensor);
     reportar_falla();
-    UART_PRINT("# ? = ayuda\r\n");
+    UART_PRINT("# ? = ayuda, e = diagnostico del AS5600\r\n");
 #if ARRANQUE_EN_PID
     if (control_iniciar_pid()) // con sp = 0 la salida es 0 hasta girar el encoder
         UART_PRINT("# PID ON: girar el encoder para subir el setpoint\r\n");
@@ -422,6 +425,78 @@ uint8_t control_aplicar_sugerencia(char tipo)
     if (!g)
         return 0;
     control_set_ganancias(g);
+    return 1;
+}
+
+static void uart_put_hex8(uint8_t v)
+{
+    const char *h = "0123456789ABCDEF";
+    UART_PRINT("0x");
+    uart_putc(h[v >> 4]);
+    uart_putc(h[v & 0x0F]);
+}
+
+// Diagnóstico del sensor: busca dispositivos en el bus I2C y muestra el estado
+// del imán. Solo con el motor quieto (el barrido deja de leer el sensor un rato).
+uint8_t control_diagnostico(void)
+{
+    if (u_actual > 0.0f || fabsf(pv) > 30.0f)
+        return 0;
+
+    UART_PRINT("# I2C:");
+    uint8_t hay = 0, hay_as5600 = 0;
+    for (uint8_t d = 0x08; d < 0x78; d++)
+        if (i2c_probar(d) == 0)
+        {
+            uart_putc(' ');
+            uart_put_hex8(d);
+            hay = 1;
+            if (d == AS5600_DIR)
+                hay_as5600 = 1;
+        }
+    if (!hay)
+    {
+        UART_PRINT(" ningun dispositivo -> revisar SDA=A4, SCL=A5, VCC, GND y pull-ups\r\n");
+        return 1;
+    }
+    UART_PRINT("\r\n");
+    if (!hay_as5600)
+    {
+        UART_PRINT("# no hay nada en ");
+        uart_put_hex8(AS5600_DIR);
+        UART_PRINT(" (si es AS5600L, poner AS5600_DIR 0x40 en as5600.h)\r\n");
+        return 1;
+    }
+
+    uint8_t agc;
+    uint16_t mag, ang;
+    if (as5600_leer_diag(&agc, &mag, &ang))
+    {
+        UART_PRINT("# AS5600: responde a la direccion pero fallan las lecturas (ruido / pull-ups)\r\n");
+        return 1;
+    }
+    uint8_t st = as5600_estado();
+    UART_PRINT("# AS5600: MD=");
+    uart_putc((st & AS5600_MD) ? '1' : '0');
+    UART_PRINT(" ML=");
+    uart_putc((st & AS5600_ML) ? '1' : '0');
+    UART_PRINT(" MH=");
+    uart_putc((st & AS5600_MH) ? '1' : '0');
+    UART_PRINT(" AGC=");
+    uart_put_i(agc);
+    UART_PRINT(" MAG=");
+    uart_put_i(mag);
+    UART_PRINT(" ang=");
+    uart_put_i(ang);
+    UART_PRINT("\r\n");
+    if (!(st & AS5600_MD))
+        UART_PRINT("# sin iman: centrarlo sobre el chip a 0,5-3 mm (iman diametral)\r\n");
+    else if (st & AS5600_ML)
+        UART_PRINT("# iman debil: acercarlo\r\n");
+    else if (st & AS5600_MH)
+        UART_PRINT("# iman muy fuerte: alejarlo\r\n");
+    else
+        UART_PRINT("# iman OK. Girar el eje a mano y repetir 'e': ang tiene que cambiar\r\n");
     return 1;
 }
 

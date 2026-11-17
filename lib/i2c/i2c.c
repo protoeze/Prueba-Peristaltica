@@ -1,5 +1,6 @@
 #include "i2c.h"
 #include "config.h"
+#include <util/delay.h>
 
 #define I2C_TIMEOUT 4000U // iteraciones (~1,5 ms)
 
@@ -48,12 +49,30 @@ static void i2c_stop(void)
         ;
 }
 
+// Si un ruido corta una transacción a la mitad, el AS5600 puede quedar
+// sosteniendo SDA en 0 y el bus queda trabado para siempre (todas las lecturas
+// fallan). Se libera dando hasta 9 pulsos de reloj a mano en SCL.
+static void i2c_liberar_bus(void)
+{
+    TWCR = 0; // el TWI suelta los pines
+    for (uint8_t i = 0; i < 9 && !(PINC & (1 << PC4)); i++)
+    {
+        clear_bit(PORTC, PC5); // SCL = 0
+        set_bit(DDRC, PC5);
+        _delay_us(5);
+        clear_bit(DDRC, PC5); // SCL suelto (pull-up)
+        set_bit(PORTC, PC5);
+        _delay_us(5);
+    }
+    TWCR = (1 << TWEN);
+}
+
 void i2c_init(void)
 {
     set_bit(PORTC, PC4); // pull-ups internos de respaldo (SDA)
     set_bit(PORTC, PC5); // (SCL)
     TWSR = 0;            // prescaler 1
-    TWBR = ((F_CPU / I2C_FREC) - 16) / 2; // 400 kHz -> 12
+    TWBR = ((F_CPU / I2C_FREC) - 16) / 2; // 100 kHz -> 72
     TWCR = (1 << TWEN);
 }
 
@@ -80,10 +99,18 @@ uint8_t i2c_leer_reg(uint8_t dir, uint8_t reg, uint8_t *dato, uint8_t n)
 {
     uint8_t e = transaccion(dir, reg, dato, n);
     i2c_stop();
-    if (e == I2C_ERR_TIMEOUT)
-    {
-        TWCR = 0; // reset del periférico
-        TWCR = (1 << TWEN);
-    }
+    if (e == I2C_ERR_TIMEOUT || e == I2C_ERR_START)
+        i2c_liberar_bus(); // también resetea el periférico
+    return e;
+}
+
+uint8_t i2c_probar(uint8_t dir)
+{
+    uint8_t e = i2c_start(0x08);
+    if (!e)
+        e = i2c_tx((uint8_t)(dir << 1), 0x18);
+    i2c_stop();
+    if (e == I2C_ERR_TIMEOUT || e == I2C_ERR_START)
+        i2c_liberar_bus();
     return e;
 }

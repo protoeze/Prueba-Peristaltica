@@ -23,6 +23,7 @@ static void ayuda(void)
     UART_PRINT("# z <Ku> <Tu>  Ziegler-Nichols lazo cerrado\r\n");
     UART_PRINT("# a <z|c|k>    aplicar ganancias sugeridas\r\n");
     UART_PRINT("# l            log ON/OFF\r\n");
+    UART_PRINT("# e            diagnostico del AS5600 (motor quieto)\r\n");
     UART_PRINT("# encoder      girar = setpoint (rapido = pasos grandes)\r\n");
 }
 
@@ -115,6 +116,10 @@ static void ejecutar(char *l)
             control_estado();
         else
             err();
+        break;
+    case 'e':
+        if (!control_diagnostico())
+            UART_PRINT("# ERROR: parar el motor primero (x)\r\n");
         break;
     case 'l':
         control_log_toggle() ? UART_PRINT("# log ON\r\n") : UART_PRINT("# log OFF\r\n");
