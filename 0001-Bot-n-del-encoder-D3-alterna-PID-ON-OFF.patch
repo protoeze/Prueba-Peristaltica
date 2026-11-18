@@ -1,0 +1,217 @@
+From 62520430b09bcdc6fca3f29e3508b6ebfef36c1d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 18 Nov 2026 11:25:57 +0000
+Subject: [PATCH] =?UTF-8?q?Bot=C3=B3n=20del=20encoder=20(D3):=20alterna=20?=
+ =?UTF-8?q?PID=20ON=20/=20OFF?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+- encoder: D3 como entrada con pull-up y enco_boton_presionado() con
+  antirrebote por tiempo (polling, un evento por pulsación)
+- control: control_get_modo()
+- comandos: parado -> PID ON; PID/manual/ensayo -> parar; falla -> rearmar
+- ayuda y comentarios actualizados
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Y9n9AZhaUeLATfaE86Aixk
+---
+ lib/comandos/comandos.c | 32 ++++++++++++++++++++++++++++++++
+ lib/config/config.h     |  3 ++-
+ lib/control/control.c   |  5 +++++
+ lib/control/control.h   |  1 +
+ lib/encoder/encoder.c   | 35 ++++++++++++++++++++++++++++++++---
+ lib/encoder/encoder.h   |  5 +++--
+ src/main.cpp            |  1 +
+ 7 files changed, 76 insertions(+), 6 deletions(-)
+
+diff --git a/lib/comandos/comandos.c b/lib/comandos/comandos.c
+index dfabf53..9c139a2 100644
+--- a/lib/comandos/comandos.c
++++ b/lib/comandos/comandos.c
+@@ -24,6 +24,7 @@ static void ayuda(void)
+     UART_PRINT("# a <z|c|k>    aplicar ganancias sugeridas\r\n");
+     UART_PRINT("# l            log ON/OFF\r\n");
+     UART_PRINT("# encoder      girar = setpoint (rapido = pasos grandes)\r\n");
++    UART_PRINT("# boton enc.   PID ON / parar (con falla: rearma)\r\n");
+ }
+ 
+ // lee un float del texto; avanza el puntero
+@@ -152,9 +153,40 @@ static void encoder_tarea(void)
+     }
+ }
+ 
++// Botón del encoder (D3): alterna PID ON / OFF.
++//   parado              -> PID ON con el setpoint actual (igual que 'g')
++//   PID, manual o ensayo -> para el motor (igual que 'x')
++//   falla               -> la borra y queda parado; otra pulsación arranca el PID
++static void boton_tarea(void)
++{
++    if (!enco_boton_presionado())
++        return;
++
++    switch (control_get_modo())
++    {
++    case CTRL_PARADO:
++        if (control_iniciar_pid())
++        {
++            UART_PRINT("# boton: PID ON sp=");
++            uart_put_i((int32_t)(control_get_sp() + 0.5f));
++            UART_PRINT(" rpm\r\n");
++        }
++        break;
++    case CTRL_FALLA:
++        control_parar();
++        UART_PRINT("# boton: falla borrada, motor parado\r\n");
++        break;
++    default: // CTRL_PID, CTRL_MANUAL, CTRL_ENSAYO
++        control_parar();
++        UART_PRINT("# boton: PID OFF, motor parado\r\n");
++        break;
++    }
++}
++
+ void comandos_tarea(void)
+ {
+     encoder_tarea();
++    boton_tarea();
+ 
+     static char linea[LINEA_MAX];
+     static uint8_t n = 0;
+diff --git a/lib/config/config.h b/lib/config/config.h
+index d9cdfdb..b3a81ae 100644
+--- a/lib/config/config.h
++++ b/lib/config/config.h
+@@ -17,7 +17,7 @@ extern "C" {
+ //-----------PINES-----------//
+ #define MOSFET_PIN PB1 // D9 = OC1A (Timer1 PWM)
+ // SDA = A4 (PC4), SCL = A5 (PC5) -> TWI por hardware
+-// Encoder: A (CLK) = D4 (PD4, PCINT20), B (DT) = D5 (PD5, PCINT21) -> ver encoder.h
++// Encoder: A (CLK) = D4 (PD4, PCINT20), B (DT) = D5 (PD5, PCINT21), botón (SW) = D3 (PD3) -> ver encoder.h
+ 
+ //--------TEMPORIZACIÓN-------//
+ #define TS_PID_MS 20 // período del lazo PID [ms]
+@@ -40,6 +40,7 @@ extern "C" {
+ #define ENC_PASO_RAPIDO_RPM 100      // cambio por paso girando rápido [rpm]
+ #define ENC_T_RAPIDO_MS 40           // pasos más seguidos que esto = giro rápido
+ #define ENC_T_AVISO_MS 250           // como mucho un "# sp=..." cada este tiempo
++#define ENC_BTN_ANTIRREBOTE_MS 30    // el botón tiene que quedar estable este tiempo
+ 
+ //------------PID------------//
+ #define U_MIN 0.0f   // salida mínima [%]
+diff --git a/lib/control/control.c b/lib/control/control.c
+index 7bf4714..1e7fb23 100644
+--- a/lib/control/control.c
++++ b/lib/control/control.c
+@@ -322,6 +322,11 @@ void control_parar(void)
+     entrar_modo(CTRL_PARADO);
+ }
+ 
++ctrl_modo_t control_get_modo(void)
++{
++    return modo;
++}
++
+ uint8_t control_iniciar_pid(void)
+ {
+     if (modo == CTRL_FALLA)
+diff --git a/lib/control/control.h b/lib/control/control.h
+index 5a3af69..4ede979 100644
+--- a/lib/control/control.h
++++ b/lib/control/control.h
+@@ -21,6 +21,7 @@ void control_init(void);
+ void control_tarea(void); // llamar en el while(1)
+ 
+ void control_parar(void); // también borra una falla
++ctrl_modo_t control_get_modo(void);
+ uint8_t control_iniciar_pid(void);
+ uint8_t control_set_sp(float rpm);
+ float control_get_sp(void);
+diff --git a/lib/encoder/encoder.c b/lib/encoder/encoder.c
+index 734dbbf..faae2d8 100644
+--- a/lib/encoder/encoder.c
++++ b/lib/encoder/encoder.c
+@@ -90,9 +90,38 @@
+ *********************************************************************************************************/
+     void encoder_init(void)
+     {
+-        // Configurar pines como entrada con pull-up
+-        DDRD &= ~(ENCODER_A_MASK | ENCODER_B_MASK);
+-        PORTD |= (ENCODER_A_MASK | ENCODER_B_MASK);
++        // Configurar pines como entrada con pull-up (el SW del KY-040 suele venir
++        // sin resistencia de pull-up en el módulo: la interna alcanza)
++        DDRD &= ~(ENCODER_A_MASK | ENCODER_B_MASK | ENCODER_BTN_MASK);
++        PORTD |= (ENCODER_A_MASK | ENCODER_B_MASK | ENCODER_BTN_MASK);
++    }
++
++/*********************************************************************************************************
++ ------Pulsador del encoder----- (polling desde el while(1), con antirrebote por tiempo)
++*********************************************************************************************************/
++    // Devuelve 1 una sola vez por pulsación, cuando el pin quedó en bajo durante
++    // ENC_BTN_ANTIRREBOTE_MS. Mantenerlo apretado no genera más pulsaciones.
++    uint8_t enco_boton_presionado(void)
++    {
++        static uint8_t estable = 1; // estado ya filtrado (1 = suelto, por el pull-up)
++        static uint8_t ultimo = 1;  // última lectura cruda
++        static uint32_t t_cambio = 0;
++
++        uint8_t lectura = (PIND & ENCODER_BTN_MASK) ? 1 : 0;
++        uint32_t ahora = tiempo_ms();
++
++        if (lectura != ultimo) // rebotando: se reinicia la espera
++        {
++            ultimo = lectura;
++            t_cambio = ahora;
++            return 0;
++        }
++        if (lectura != estable && (uint32_t)(ahora - t_cambio) >= ENC_BTN_ANTIRREBOTE_MS)
++        {
++            estable = lectura;
++            return (estable == 0); // flanco de bajada = se apretó
++        }
++        return 0;
+     }
+ 
+ /*********************************************************************************************************
+diff --git a/lib/encoder/encoder.h b/lib/encoder/encoder.h
+index d66aaa6..ac108ad 100644
+--- a/lib/encoder/encoder.h
++++ b/lib/encoder/encoder.h
+@@ -17,12 +17,12 @@ extern "C" {
+     // Definición de pines del encoder (común del encoder a GND)
+     #define ENCODER_A PD4   // D4 (PCINT20)
+     #define ENCODER_B PD5   // D5 (PCINT21)  -> tiene que ser el pin siguiente a ENCODER_A
+-    //#define ENCODER_BTN PD6 // D6 (PCINT22) - opcional
++    #define ENCODER_BTN PD3 // D3 (pulsador del encoder, activo en bajo) -> se lee por polling
+ 
+     // Máscaras para los pines del encoder
+     #define ENCODER_A_MASK (1 << ENCODER_A)
+     #define ENCODER_B_MASK (1 << ENCODER_B)
+-    //#define ENCODER_BTN_MASK (1 << ENCODER_BTN)
++    #define ENCODER_BTN_MASK (1 << ENCODER_BTN)
+ 
+     // Límites del setpoint [rpm]
+     #define LIMITE_SUPERIOR_SP ((uint16_t)RPM_SP_MAX)
+@@ -38,6 +38,7 @@ extern "C" {
+         void pcint_init(void);
+         uint8_t read_encoder_pins(void);
+         int8_t get_ENCODER(void); // pasos girados desde la última lectura (+ horario, - antihorario)
++        uint8_t enco_boton_presionado(void); // 1 una sola vez por cada pulsación (con antirrebote)
+ 
+     /*****************************************************
+      ****------FUCIONES RELACIONADAS AL GIRO-----
+diff --git a/src/main.cpp b/src/main.cpp
+index be6d275..a0758d8 100644
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -10,6 +10,7 @@
+ // Actuador : MOSFET en D9 (Timer1, PWM 15,6 kHz)
+ // Sensor   : AS5600 por I2C (SDA = A4, SCL = A5) -> velocidad en rpm
+ // Encoder  : A = D4, B = D5 -> setpoint (también con 's <rpm>' por la terminal)
++//            botón = D3 -> PID ON / OFF (también con 'g' / 'x')
+ // Terminal : 115200 baud. Con '?' se ve la ayuda.
+ //
+ // Sintonía (punto 3 de la consigna):
+-- 
+2.43.0
+
