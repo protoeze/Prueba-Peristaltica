@@ -78,7 +78,7 @@ static void entrar_modo(ctrl_modo_t m)
     modo = m;
     t_inicio_log = tiempo_ms();
     if (log_on && (m == CTRL_PID || m == CTRL_MANUAL || m == CTRL_ENSAYO))
-        UART_PRINT("t_ms,sp,rpm,u_pct\r\n");
+        UART_PRINT("t_ms   -   sp   -   rpm  -  u_pct\r\n");
 }
 
 // Apaga el motor en el acto. El mensaje se imprime después, desde control_tarea():
@@ -526,11 +526,11 @@ void control_estado(void)
 {
     UART_PRINT("# modo=");
     uart_put_i(modo); // 0 parado, 1 manual, 2 pid, 3 ensayo, 4 falla
-    UART_PRINT(" sp=");
+    UART_PRINT("   sp=   ");
     uart_put_f(sp, 1);
-    UART_PRINT(" rpm=");
+    UART_PRINT("   rpm=");
     uart_put_f(pv, 1);
-    UART_PRINT(" u=");
+    UART_PRINT("    u=");
     uart_put_f(u_actual, 1);
     UART_PRINT("%\r\n# ");
     ganancias_t g;
