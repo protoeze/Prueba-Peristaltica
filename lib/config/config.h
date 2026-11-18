@@ -61,8 +61,8 @@ extern "C" { // main.cpp es C++ y el resto es C: así los nombres se enlazan bie
 //----------ENCODER----------// [FIJO]
 #define ENC_SENTIDO 1                // poner -1 si el setpoint baja al girar en horario
 #define ENC_TRANSICIONES_POR_PASO 4  // KY-040: 4 (1 ciclo por detent). Algunos EC11: 2
-#define ENC_PASO_RPM 10              // cambio de setpoint por paso girando despacio [rpm]
-#define ENC_PASO_RAPIDO_RPM 100      // cambio por paso girando rápido [rpm]
+#define ENC_PASO_RPM 1               // cambio de setpoint por paso girando despacio [rpm]
+#define ENC_PASO_RAPIDO_RPM 10       // cambio por paso girando rápido [rpm]
 #define ENC_T_RAPIDO_MS 40           // pasos más seguidos que esto = giro rápido [ms]
 #define ENC_T_AVISO_MS 250           // como mucho un "# sp=..." cada este tiempo [ms]
 #define ENC_BTN_ANTIRREBOTE_MS 30    // el botón tiene que quedar estable este tiempo [ms]

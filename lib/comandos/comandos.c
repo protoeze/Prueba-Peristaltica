@@ -4,7 +4,7 @@
 // Terminal: 115200 baud, 8N1. Cada comando es UNA línea que termina en Enter (\r o \n).
 // Mayúsculas o minúsculas da igual. Se acepta coma o punto decimal ("p 0,05" = "p 0.05").
 // Respuestas: "# OK", "# ERROR" o el estado actual. Las líneas que empiezan con '#' son
-// comentarios; el resto es el log en columnas: t_ms, sp, rpm, u_pct
+// comentarios; el resto es el log en columnas: t_ms, sp, rpm, u_pct, ang_grad
 //
 // ¿QUÉ CAMBIA CADA COMANDO?  (variable que modifica -> dónde vive -> rango / unidades)
 // ---------------------------------------------------------------------------------------------------

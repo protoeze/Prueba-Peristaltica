@@ -52,7 +52,7 @@ static float sp = 0.0f,       // setpoint [rpm]          <- 's' y encoder
              pv = 0.0f,       // velocidad medida filtrada [rpm]
              u_actual = 0.0f, // salida aplicada al PWM [%]
              u_manual = 0.0f; // salida del modo manual [%] <- 'm'
-static uint8_t log_on = 1;            // 1 = imprime el log t_ms, sp, rpm, u_pct <- 'l'
+static uint8_t log_on = 1;            // 1 = imprime el log t_ms, sp, rpm, u_pct, ang_grad <- 'l'
 static uint16_t log_periodo = LOG_PERIODO_MS; // una línea cada tantos ms <- 'l <ms>'
 static uint32_t t_log_prox;           // próxima línea del log [ms]
 static uint8_t log_lineas = 0;        // líneas impresas desde el último encabezado
@@ -169,21 +169,25 @@ static void chequear_iman(void)
 }
 
 // Formato del log: columnas de ancho fijo separadas por espacios, por ejemplo
-//        t_ms         sp        rpm      u_pct
-//       18797      720.0      236.2      100.0
+//        t_ms          sp         rpm       u_pct    ang_grad
+//       18797       190.0       189.9        87.2       123.4
 // (para pasarlo a Excel / Python: separar por espacios; las líneas con letras son encabezados)
+// ang_grad = ángulo que leyó el AS5600 en ese momento (0..360). Con 'l 20' se ve cómo avanza
+// vuelta a vuelta: si la rpm sube y baja siempre en los mismos ángulos, la ondulación está
+// atada a la posición del eje (rodillos de la bomba o imán descentrado).
 #define LOG_ANCHO 10 // [FIJO] caracteres por columna
 #define LOG_SEP "  " // [FIJO] separación entre columnas
 
 static void log_encabezado(void)
 {
     // cada título ocupa LOG_ANCHO caracteres, alineado a la derecha como los números
-    UART_PRINT("\r\n      t_ms" LOG_SEP "        sp" LOG_SEP "       rpm" LOG_SEP "     u_pct\r\n");
+    UART_PRINT("\r\n      t_ms" LOG_SEP "        sp" LOG_SEP "       rpm" LOG_SEP "     u_pct" LOG_SEP
+               "  ang_grad\r\n");
     log_lineas = 0;
     log_pide_encab = 0;
 }
 
-// una línea del log: t_ms, sp, rpm, u_pct
+// una línea del log: t_ms, sp, rpm, u_pct, ang_grad
 static void log_linea(uint32_t ahora)
 {
     if (log_pide_encab || (LOG_ENCABEZADO_CADA && log_lineas >= LOG_ENCABEZADO_CADA))
@@ -195,6 +199,8 @@ static void log_linea(uint32_t ahora)
     uart_put_f_ancho(pv, LOG_ANCHO, 1);                           // rpm medidas
     UART_PRINT(LOG_SEP);
     uart_put_f_ancho(u_actual, LOG_ANCHO, 1);                     // % de PWM aplicado
+    UART_PRINT(LOG_SEP);
+    uart_put_f_ancho(as5600_angulo() * (360.0f / AS5600_CUENTAS), LOG_ANCHO, 1); // ángulo [grados]
     UART_PRINT("\r\n");
     log_lineas++;
 }

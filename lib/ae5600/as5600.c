@@ -73,4 +73,5 @@ uint8_t as5600_leer_diag(uint8_t *agc, uint16_t *mag, uint16_t *ang)
 }
 
 uint32_t as5600_posicion(void) { return pos; }  // cuentas acumuladas
+uint16_t as5600_angulo(void) { return ang_ant; } // último ángulo leído 0..4095 (columna ang_grad del log)
 uint8_t as5600_estado(void) { return estado; }  // último STATUS leído

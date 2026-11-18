@@ -27,6 +27,7 @@ extern "C" {
 uint8_t as5600_init(void);       // 0 = OK
 uint8_t as5600_actualizar(void); // lee el ángulo y acumula la posición (0 = OK)
 uint32_t as5600_posicion(void);  // cuentas acumuladas (usar la resta con signo)
+uint16_t as5600_angulo(void);    // último ángulo crudo leído, 0..4095 (= 0..360 grados)
 uint8_t as5600_leer_estado(void); // lee STATUS (0 = OK)
 uint8_t as5600_estado(void);     // último registro STATUS leído
 // diagnóstico: ganancia automática, magnitud del campo y ángulo crudo (0 = OK)
