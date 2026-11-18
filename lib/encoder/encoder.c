@@ -90,9 +90,38 @@
 *********************************************************************************************************/
     void encoder_init(void)
     {
-        // Configurar pines como entrada con pull-up
-        DDRD &= ~(ENCODER_A_MASK | ENCODER_B_MASK);
-        PORTD |= (ENCODER_A_MASK | ENCODER_B_MASK);
+        // Configurar pines como entrada con pull-up (el SW del KY-040 suele venir
+        // sin resistencia de pull-up en el módulo: la interna alcanza)
+        DDRD &= ~(ENCODER_A_MASK | ENCODER_B_MASK | ENCODER_BTN_MASK);
+        PORTD |= (ENCODER_A_MASK | ENCODER_B_MASK | ENCODER_BTN_MASK);
+    }
+
+/*********************************************************************************************************
+ ------Pulsador del encoder----- (polling desde el while(1), con antirrebote por tiempo)
+*********************************************************************************************************/
+    // Devuelve 1 una sola vez por pulsación, cuando el pin quedó en bajo durante
+    // ENC_BTN_ANTIRREBOTE_MS. Mantenerlo apretado no genera más pulsaciones.
+    uint8_t enco_boton_presionado(void)
+    {
+        static uint8_t estable = 1; // estado ya filtrado (1 = suelto, por el pull-up)
+        static uint8_t ultimo = 1;  // última lectura cruda
+        static uint32_t t_cambio = 0;
+
+        uint8_t lectura = (PIND & ENCODER_BTN_MASK) ? 1 : 0;
+        uint32_t ahora = tiempo_ms();
+
+        if (lectura != ultimo) // rebotando: se reinicia la espera
+        {
+            ultimo = lectura;
+            t_cambio = ahora;
+            return 0;
+        }
+        if (lectura != estable && (uint32_t)(ahora - t_cambio) >= ENC_BTN_ANTIRREBOTE_MS)
+        {
+            estable = lectura;
+            return (estable == 0); // flanco de bajada = se apretó
+        }
+        return 0;
     }
 
 /*********************************************************************************************************

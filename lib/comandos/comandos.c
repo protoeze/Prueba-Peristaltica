@@ -25,6 +25,7 @@ static void ayuda(void)
     UART_PRINT("# l            log ON/OFF\r\n");
     UART_PRINT("# e            diagnostico del AS5600 (motor quieto)\r\n");
     UART_PRINT("# encoder      girar = setpoint (rapido = pasos grandes)\r\n");
+    UART_PRINT("# boton enc.   PID ON / parar (con falla: rearma)\r\n");
 }
 
 // lee un float del texto; avanza el puntero
@@ -157,9 +158,40 @@ static void encoder_tarea(void)
     }
 }
 
+// Botón del encoder (D3): alterna PID ON / OFF.
+//   parado              -> PID ON con el setpoint actual (igual que 'g')
+//   PID, manual o ensayo -> para el motor (igual que 'x')
+//   falla               -> la borra y queda parado; otra pulsación arranca el PID
+static void boton_tarea(void)
+{
+    if (!enco_boton_presionado())
+        return;
+
+    switch (control_get_modo())
+    {
+    case CTRL_PARADO:
+        if (control_iniciar_pid())
+        {
+            UART_PRINT("# boton: PID ON sp=");
+            uart_put_i((int32_t)(control_get_sp() + 0.5f));
+            UART_PRINT(" rpm\r\n");
+        }
+        break;
+    case CTRL_FALLA:
+        control_parar();
+        UART_PRINT("# boton: falla borrada, motor parado\r\n");
+        break;
+    default: // CTRL_PID, CTRL_MANUAL, CTRL_ENSAYO
+        control_parar();
+        UART_PRINT("# boton: PID OFF, motor parado\r\n");
+        break;
+    }
+}
+
 void comandos_tarea(void)
 {
     encoder_tarea();
+    boton_tarea();
 
     static char linea[LINEA_MAX];
     static uint8_t n = 0;

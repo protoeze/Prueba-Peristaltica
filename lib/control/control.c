@@ -345,6 +345,11 @@ void control_parar(void)
     entrar_modo(CTRL_PARADO);
 }
 
+ctrl_modo_t control_get_modo(void)
+{
+    return modo;
+}
+
 uint8_t control_iniciar_pid(void)
 {
     if (modo == CTRL_FALLA)

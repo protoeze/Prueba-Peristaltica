@@ -11,6 +11,7 @@
 // Actuador : MOSFET en D9 (Timer1, PWM 15,6 kHz)
 // Sensor   : AS5600 por I2C (SDA = A4, SCL = A5) -> velocidad en rpm
 // Encoder  : A = D4, B = D5 -> setpoint (también con 's <rpm>' por la terminal)
+//            botón = D3 -> PID ON / OFF (también con 'g' / 'x')
 // Terminal : 115200 baud. Con '?' se ve la ayuda.
 //
 // Sintonía (punto 3 de la consigna):

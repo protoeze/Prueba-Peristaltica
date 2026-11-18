@@ -21,6 +21,7 @@ void control_init(void);
 void control_tarea(void); // llamar en el while(1)
 
 void control_parar(void); // también borra una falla
+ctrl_modo_t control_get_modo(void);
 uint8_t control_iniciar_pid(void);
 uint8_t control_set_sp(float rpm);
 float control_get_sp(void);
