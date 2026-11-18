@@ -11,20 +11,21 @@
 /*********************************************************************************************************
     TIEMPO
 *********************************************************************************************************/
-    volatile uint32_t tiempo=0; // volatile: lo modifica la ISR
-    const char* data;
+    volatile uint32_t tiempo=0; // volatile: lo modifica la ISR  [ms desde el encendido]
+    const char* data;           // no se usa
     // data = msg;
 
+// Interrupción del Timer0 cada 1 ms (configurado en config_timer0(), config.c)
 ISR(TIMER0_COMPA_vect)
 {
-    tiempo++;
+    tiempo++; // un milisegundo más
 }
 
 /*********************************************************************************************************
     OBTIENE/LEE EL TIEMPO (contador)
 *********************************************************************************************************/
     uint32_t get_time(void){
-        return tiempo;
+        return tiempo; // usar tiempo_ms() desde afuera: lee los 4 bytes sin que la ISR los cambie
     }
 
 /*********************************************************************************************************
@@ -42,7 +43,7 @@ ISR(TIMER0_COMPA_vect)
     UN GETTER PARA EL ADC (CREO JASKAJSAJS, igual se podria usar de cualquier ota forma)
 *********************************************************************************************************/
     /**************************************/
-            uint8_t valor= 0; 
+            uint8_t valor= 0; // no se usa en este proyecto
 
     uint8_t get_valor(void)
     {
@@ -56,4 +57,3 @@ ISR(TIMER0_COMPA_vect)
     {
         valor = new_valor;
     }
-

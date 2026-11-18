@@ -1,3 +1,9 @@
+//=======================================================================================================
+// encoder.c - Encoder rotativo (KY-040) para el setpoint y su botón para PID ON / OFF
+//=======================================================================================================
+// valor_sp (más abajo) es el setpoint del encoder: también lo pisa el comando 's <rpm>'
+// del puerto serie (enco_set_sp). Los pasos y tiempos ENC_* son [FIJO] (config.h).
+
 /*********************************************************************************************************
  ****------INCLUDES-----
 *********************************************************************************************************/
@@ -14,12 +20,13 @@
     ////////////////////////////////////////////////////////
         static volatile int8_t encoder_transiciones = 0; // dentro del paso actual
         static volatile int8_t encoder_pasos = 0;        // pasos completos sin leer
-        static volatile uint8_t encoder_prev_state = 0;
+        static volatile uint8_t encoder_prev_state = 0;  // estado anterior de A y B (2 bits)
     ////////////////////////////////////////////////////////
+    // Se ejecuta cada vez que cambia D4 o D5 (también con los rebotes de los contactos)
     ISR(PCINT2_vect)
     {
-        uint8_t current_state = read_encoder_pins();
-        uint8_t state_change = (encoder_prev_state << 2) | current_state;
+        uint8_t current_state = read_encoder_pins();                      // BA actual
+        uint8_t state_change = (encoder_prev_state << 2) | current_state; // 4 bits: anterior + actual
 
         // Detectar transición
         if (current_state != encoder_prev_state)
@@ -56,10 +63,10 @@
 #endif
             {
                 if (encoder_transiciones >= ENC_TRANSICIONES_POR_PASO / 2 && encoder_pasos < 127)
-                    encoder_pasos++;
+                    encoder_pasos++;      // un clic horario
                 else if (encoder_transiciones <= -(ENC_TRANSICIONES_POR_PASO / 2) && encoder_pasos > -127)
-                    encoder_pasos--;
-                encoder_transiciones = 0;
+                    encoder_pasos--;      // un clic antihorario
+                encoder_transiciones = 0; // empieza el paso siguiente
             }
         }
     }
@@ -69,12 +76,12 @@
 *********************************************************************************************************/
     int8_t get_ENCODER(void)
     {
-        uint8_t sreg = SREG;
-        cli();
+        uint8_t sreg = SREG;          // guarda el estado de las interrupciones
+        cli();                        // la ISR no puede tocar encoder_pasos mientras se lee
         int8_t pasos = encoder_pasos;
-        encoder_pasos = 0;
+        encoder_pasos = 0;            // ya se leyeron
         SREG = sreg;
-        return (int8_t)(pasos * ENC_SENTIDO);
+        return (int8_t)(pasos * ENC_SENTIDO); // ENC_SENTIDO = -1 invierte el sentido
     }
 
 /*********************************************************************************************************
@@ -82,7 +89,7 @@
 *********************************************************************************************************/
     uint8_t read_encoder_pins(void)
     {
-        return (PIND & (ENCODER_A_MASK | ENCODER_B_MASK)) >> ENCODER_A;
+        return (PIND & (ENCODER_A_MASK | ENCODER_B_MASK)) >> ENCODER_A; // lee el puerto D y corre A al bit 0
     }
 
 /*********************************************************************************************************
@@ -153,7 +160,7 @@
          ------LECTOR DE SENTIDO DE GIRO Y AUMENTADOR-----
         *******************************************************/
             /////////////////////////////
-                static uint16_t valor_sp = 0; // [rpm]
+                static uint16_t valor_sp = 0; // [rpm] <- giro del encoder y comando 's' (enco_set_sp)
             /////////////////////////////
             void sistema_sube_baja_sp(int8_t snt_g, uint16_t paso) // snt_g = sentido de giro
             {
@@ -179,12 +186,13 @@
             // Paso chico girando despacio, paso grande si los clics vienen seguidos
             uint16_t enco_get_sp(void)
             {
-                int8_t giro = get_ENCODER();
+                int8_t giro = get_ENCODER();  // clics desde la última llamada (+ horario, - antihorario)
                 static uint32_t tiempo = 0; // momento del último paso
 
                 if (giro != 0)
                 {
                     uint32_t ahora = tiempo_ms();
+                    // clics muy seguidos (< ENC_T_RAPIDO_MS) -> paso grande, si no paso chico
                     uint16_t paso = ((uint32_t)(ahora - tiempo) < ENC_T_RAPIDO_MS) ? ENC_PASO_RAPIDO_RPM : ENC_PASO_RPM;
                     tiempo = ahora;
 
@@ -199,9 +207,10 @@
         /*******************************************************
          ------FUCNION PA SETEAR/REINICIAR------
         *******************************************************/
+            // La llama el comando 's <rpm>' (comandos.c) para que el encoder siga desde ese valor
             void enco_set_sp(uint16_t set)
             {
                 if (set > LIMITE_SUPERIOR_SP)
-                    set = LIMITE_SUPERIOR_SP;
+                    set = LIMITE_SUPERIOR_SP; // no pasar de RPM_SP_MAX
                 valor_sp = set;
             }

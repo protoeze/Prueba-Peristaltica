@@ -1,4 +1,9 @@
-#ifndef I2C_H
+//=======================================================================================================
+// i2c.h - Maestro I2C (TWI por hardware del ATmega328P) en A4 (SDA) / A5 (SCL)
+//=======================================================================================================
+// Nada se cambia por el puerto serie. [FIJO]
+
+#ifndef I2C_H // guarda de inclusión
 #define I2C_H
 
 #ifdef __cplusplus
@@ -7,11 +12,11 @@ extern "C" {
 
 #include <Arduino.h>
 
-#define I2C_FREC 100000UL // 100 kHz: más tolerante a cables largos, pull-ups débiles y ruido del motor
-#define I2C_OK 0
-#define I2C_ERR_TIMEOUT 1
-#define I2C_ERR_START 2
-#define I2C_ERR_NACK 3
+#define I2C_FREC 100000UL // [FIJO] 100 kHz: más tolerante a cables largos, pull-ups débiles y ruido del motor
+#define I2C_OK 0            // sin error
+#define I2C_ERR_TIMEOUT 1   // el periférico no terminó a tiempo (bus trabado o sin pull-ups)
+#define I2C_ERR_START 2     // no se pudo generar la condición de START
+#define I2C_ERR_NACK 3      // el esclavo no respondió (dirección o cable)
 
 void i2c_init(void);
 // lee n bytes desde el registro reg del dispositivo dir (7 bits)
@@ -25,4 +30,4 @@ void i2c_niveles(uint8_t *sda, uint8_t *scl);
 }
 #endif
 
-#endif
+#endif // I2C_H

@@ -1,60 +1,77 @@
-#include "control.h"
-#include "config.h"
-#include "uart.h"
-#include "pwm.h"
-#include "as5600.h"
-#include "i2c.h"
-#include "pid.h"
-#include <math.h>
+//=======================================================================================================
+// control.c - Lazo de control: lee el AS5600, calcula la velocidad, corre el PID y maneja el PWM
+//=======================================================================================================
+// Acá viven las variables que cambian los comandos del puerto serie (ver tabla en comandos.c):
+//   pid.kp / pid.ki / pid.kd  <- 'p', 'i', 'd' y 'a z|c|k'
+//   sp                        <- 's' y el encoder
+//   u_manual                  <- 'm'
+//   modo                      <- 'g', 'x', 'm', 't' y el botón del encoder
+//   log_on                    <- 'l'
+//   ens.u0 / ens.u1           <- 't'
+// El comando 'e' (control_diagnostico) no cambia nada: solo muestra el estado del bus y del imán.
+//=======================================================================================================
 
-//-------ENSAYO AL ESCALÓN-------//
+#include "control.h" // tipos ctrl_modo_t y prototipos de este archivo
+#include "config.h"  // TS_PID_MS, límites, ganancias iniciales, tiempo_ms()
+#include "uart.h"    // UART_PRINT, uart_put_i, uart_put_f
+#include "pwm.h"     // pwm_set(), pwm_set_porcentaje(): salida al MOSFET
+#include "as5600.h"  // lectura del sensor magnético de posición
+#include "i2c.h"     // i2c_niveles(), i2c_probar() para el diagnóstico 'e'
+#include "pid.h"     // pid_ctrl_t, pid_calcular()
+#include <math.h>    // fabsf()
+
+//-------ENSAYO AL ESCALÓN-------// [FIJO]
 #define ENSAYO_N 250                         // muestras (250 * 20 ms = 5 s)
 #define ENS_VENTANA_TICKS (500 / TS_PID_MS)  // cada 0,5 s revisa si se estabilizó
 #define ENS_VENTANAS_MAX 20                  // espera máxima 10 s
 
-#define MAX_SIN_IMAN 3 // lecturas de STATUS seguidas sin imán -> falla
+#define MAX_SIN_IMAN 3 // [FIJO] lecturas de STATUS seguidas sin imán -> falla
 
 typedef enum
 {
-    ENS_ESPERA,
-    ENS_ESCALON
+    ENS_ESPERA,  // aplicando u0 hasta que la velocidad se estabilice
+    ENS_ESCALON  // aplicó u1 y está grabando la respuesta
 } ens_fase_t;
 
 static struct
 {
-    ens_fase_t fase;
-    float u0, u1, pv_ref;
-    uint16_t cnt, ventanas, n;
-    int16_t y[ENSAYO_N];
-    ident_t id;
+    ens_fase_t fase;      // en qué parte del ensayo está
+    float u0, u1, pv_ref; // u0, u1 <- comando 't <u0> <u1>' [%]; pv_ref = velocidad de la ventana anterior
+    uint16_t cnt, ventanas, n; // contadores: ticks de la ventana, ventanas esperadas, muestras grabadas
+    int16_t y[ENSAYO_N];  // velocidad grabada después del escalón [rpm]
+    ident_t id;           // resultado: K, tau, theta
 } ens;
 
 //-------------ESTADO-------------//
-static ctrl_modo_t modo = CTRL_PARADO;
-static pid_ctrl_t pid;
-static ganancias_t sug_zn, sug_chr, sug_zc;
+static ctrl_modo_t modo = CTRL_PARADO; // <- 'g', 'x', 'm', 't' y botón del encoder
+static pid_ctrl_t pid;                 // pid.kp, pid.ki, pid.kd <- 'p', 'i', 'd' y 'a' (iniciales en config.h)
+static ganancias_t sug_zn, sug_chr, sug_zc; // sugerencias calculadas por 't' (zn, chr) y 'z' (zc)
 static uint8_t sug_ok = 0; // bit0 = z, bit1 = c, bit2 = k
-static float sp = 0.0f, pv = 0.0f, u_actual = 0.0f, u_manual = 0.0f;
-static uint8_t log_on = 1;
-static uint8_t errores_sensor = 0;
-static uint8_t sin_iman = 0;
+static float sp = 0.0f,       // setpoint [rpm]          <- 's' y encoder
+             pv = 0.0f,       // velocidad medida filtrada [rpm]
+             u_actual = 0.0f, // salida aplicada al PWM [%]
+             u_manual = 0.0f; // salida del modo manual [%] <- 'm'
+static uint8_t log_on = 1;            // 1 = imprime el CSV t_ms,sp,rpm,u_pct <- 'l'
+static uint8_t errores_sensor = 0;    // errores I2C seguidos
+static uint8_t sin_iman = 0;          // lecturas seguidas sin imán
 static const char *falla_pend = 0; // mensaje (en flash) pendiente de imprimir
-static uint32_t pos_ant, t_ant, t_inicio_log;
-static uint32_t t_pid_prox, t_sensor_prox;
+static uint32_t pos_ant, t_ant, t_inicio_log; // posición y tiempo de la medición anterior; inicio del log
+static uint32_t t_pid_prox, t_sensor_prox;    // próximo instante de ejecución del PID y del sensor [ms]
 
 //------------AUXILIARES------------//
 // true cuando venció el período; si el programa se atrasó, resincroniza
 static uint8_t vencio(uint32_t *prox, uint16_t periodo)
 {
     uint32_t ahora = tiempo_ms();
-    if ((int32_t)(ahora - *prox) < 0)
+    if ((int32_t)(ahora - *prox) < 0) // todavía no llegó (resta con signo: aguanta el desborde)
         return 0;
-    *prox += periodo;
-    if ((int32_t)(ahora - *prox) >= 0)
-        *prox = ahora + periodo;
+    *prox += periodo;                 // próximo vencimiento, sin acumular atraso
+    if ((int32_t)(ahora - *prox) >= 0) // se atrasó más de un período entero
+        *prox = ahora + periodo;      // se resincroniza en vez de ejecutar varias veces seguidas
     return 1;
 }
 
+// espera activa (solo se usa en el arranque)
 static void esperar_ms(uint16_t ms)
 {
     uint32_t t = tiempo_ms();
@@ -62,6 +79,7 @@ static void esperar_ms(uint16_t ms)
         ;
 }
 
+// imprime "Kp=... Ki=... Kd=..."
 static void imprimir_gan(const ganancias_t *g)
 {
     UART_PRINT("Kp=");
@@ -73,10 +91,11 @@ static void imprimir_gan(const ganancias_t *g)
     UART_PRINT("\r\n");
 }
 
+// cambia de modo y, si el log está prendido, imprime el encabezado del CSV
 static void entrar_modo(ctrl_modo_t m)
 {
     modo = m;
-    t_inicio_log = tiempo_ms();
+    t_inicio_log = tiempo_ms(); // la columna t_ms arranca en 0
     if (log_on && (m == CTRL_PID || m == CTRL_MANUAL || m == CTRL_ENSAYO))
         UART_PRINT("t_ms,sp,rpm,u_pct\r\n");
 }
@@ -86,14 +105,15 @@ static void entrar_modo(ctrl_modo_t m)
 // espera lugar en el buffer) y ahí no se debe imprimir.
 static void declarar_falla(const char *msg_P)
 {
-    if (modo == CTRL_FALLA)
+    if (modo == CTRL_FALLA) // ya estaba en falla: se queda con el primer mensaje
         return;
-    modo = CTRL_FALLA;
-    pwm_set(0);
+    modo = CTRL_FALLA;      // bloquea 'g', 'm' y 't' hasta 'x' o el botón
+    pwm_set(0);             // motor apagado
     u_actual = 0.0f;
     falla_pend = msg_P;
 }
 
+// imprime la falla pendiente (fuera de uart_putc)
 static void reportar_falla(void)
 {
     if (!falla_pend)
@@ -105,9 +125,10 @@ static void reportar_falla(void)
     UART_PRINT(" (x para rearmar)\r\n");
 }
 
+// lee el ángulo del AS5600; tras MAX_ERRORES_SENSOR errores seguidos declara falla
 static uint8_t leer_sensor(void)
 {
-    if (as5600_actualizar() == 0)
+    if (as5600_actualizar() == 0) // lectura correcta
     {
         errores_sensor = 0;
         return 1;
@@ -122,7 +143,7 @@ static uint8_t leer_sensor(void)
 // no deja al AS5600 sin leer (más de media vuelta entre lecturas = error de cuenta).
 static void tarea_sensor(void)
 {
-    static uint8_t ocupado = 0;
+    static uint8_t ocupado = 0; // evita que se llame a sí misma (reentrada)
     if (ocupado)
         return;
     ocupado = 1;
@@ -142,19 +163,21 @@ static void chequear_iman(void)
         declarar_falla(PSTR("se perdio el iman del AS5600"));
 }
 
+// una línea del CSV: t_ms,sp,rpm,u_pct
 static void log_linea(uint32_t ahora)
 {
-    uart_put_i((int32_t)(ahora - t_inicio_log));
+    uart_put_i((int32_t)(ahora - t_inicio_log)); // t_ms desde que se entró al modo
     uart_putc(',');
-    uart_put_f(modo == CTRL_PID ? sp : 0.0f, 1);
+    uart_put_f(modo == CTRL_PID ? sp : 0.0f, 1); // sp (solo tiene sentido en PID)
     uart_putc(',');
-    uart_put_f(pv, 1);
+    uart_put_f(pv, 1);                           // rpm medidas
     uart_putc(',');
-    uart_put_f(u_actual, 1);
+    uart_put_f(u_actual, 1);                     // % de PWM aplicado
     UART_PRINT("\r\n");
 }
 
 //------------ENSAYO------------//
+// Al terminar el ensayo: identifica el modelo y calcula ganancias ZN y CHR (no las aplica)
 static void ensayo_reportar(void)
 {
     uint8_t r = sint_identificar(ens.y, ENSAYO_N, TS_PID_S, ens.u1 - ens.u0, &ens.id);
@@ -180,9 +203,9 @@ static void ensayo_reportar(void)
     uart_put_f(ens.id.theta, 3);
     UART_PRINT(" s\r\n");
 
-    sint_zn_abierto(&ens.id, &sug_zn);
-    sint_chr_0(&ens.id, &sug_chr);
-    sug_ok |= 0x03;
+    sint_zn_abierto(&ens.id, &sug_zn); // sugerencia "a z"
+    sint_chr_0(&ens.id, &sug_chr);     // sugerencia "a c"
+    sug_ok |= 0x03;                    // habilita "a z" y "a c"
     UART_PRINT("# ZN  : ");
     imprimir_gan(&sug_zn);
     UART_PRINT("# CHR : ");
@@ -190,22 +213,23 @@ static void ensayo_reportar(void)
     UART_PRINT("# usar: a z | a c\r\n");
 }
 
+// un paso del ensayo (cada TS_PID_MS); devuelve la salida a aplicar [%]
 static float ensayo_tick(void)
 {
-    if (ens.fase == ENS_ESPERA)
+    if (ens.fase == ENS_ESPERA) // 1ra parte: u0 hasta que la velocidad se estabilice
     {
-        if (++ens.cnt >= ENS_VENTANA_TICKS)
+        if (++ens.cnt >= ENS_VENTANA_TICKS) // cada 0,5 s
         {
             ens.cnt = 0;
-            float tol = 0.01f * fabsf(pv);
+            float tol = 0.01f * fabsf(pv); // estable = cambió menos del 1 %...
             if (tol < 2.0f)
-                tol = 2.0f;
+                tol = 2.0f;                // ...o de 2 rpm
             uint8_t estable = (ens.ventanas > 0) && (fabsf(pv - ens.pv_ref) <= tol);
             ens.pv_ref = pv;
             ens.ventanas++;
             if (estable || ens.ventanas >= ENS_VENTANAS_MAX)
             {
-                ens.fase = ENS_ESCALON;
+                ens.fase = ENS_ESCALON; // pasa a aplicar u1
                 ens.n = 0;
             }
         }
@@ -214,7 +238,7 @@ static float ensayo_tick(void)
 
     // el primer y[0] es la velocidad justo antes de aplicar el escalón
     ens.y[ens.n++] = (int16_t)(pv < 0.0f ? 0.0f : pv);
-    if (ens.n >= ENSAYO_N)
+    if (ens.n >= ENSAYO_N) // grabó las 250 muestras (5 s)
     {
         // primero se cambia de modo: si aparece una falla mientras se imprime
         // el reporte, no tiene que quedar pisada por CTRL_PARADO
@@ -226,37 +250,38 @@ static float ensayo_tick(void)
 }
 
 //--------------LAZO--------------//
+// Se ejecuta cada TS_PID_MS (20 ms): mide la velocidad, calcula la salida y la aplica
 static void tick_pid(void)
 {
     uint32_t ahora = tiempo_ms();
-    if (!leer_sensor())
+    if (!leer_sensor()) // sin lectura válida no se toca la salida
         return;
 
     // velocidad = cuentas recorridas / tiempo real transcurrido
-    uint32_t pos = as5600_posicion();
-    uint32_t dt = ahora - t_ant;
+    uint32_t pos = as5600_posicion(); // cuentas acumuladas (4096 por vuelta)
+    uint32_t dt = ahora - t_ant;      // [ms]
     if (dt == 0)
         return;
     float rpm = (float)(int32_t)(pos - pos_ant) * (60000.0f / AS5600_CUENTAS) / (float)dt;
     pos_ant = pos;
     t_ant = ahora;
-    pv += RPM_FILTRO_ALFA * (rpm - pv);
+    pv += RPM_FILTRO_ALFA * (rpm - pv); // filtro pasa-bajos de 1er orden de la medición
 
-    if (fabsf(pv) > RPM_MAX_SEGURIDAD)
+    if (fabsf(pv) > RPM_MAX_SEGURIDAD)  // protección por sobrevelocidad
         declarar_falla(PSTR("sobrevelocidad"));
     chequear_iman();
 
-    float u = 0.0f;
+    float u = 0.0f; // salida a aplicar [%]
     switch (modo)
     {
     case CTRL_MANUAL:
-        u = u_manual;
+        u = u_manual;                     // lazo abierto: lo que se pidió con 'm'
         break;
     case CTRL_PID:
-        u = pid_calcular(&pid, sp, pv);
+        u = pid_calcular(&pid, sp, pv);   // lazo cerrado: usa pid.kp, pid.ki, pid.kd
         break;
     case CTRL_ENSAYO:
-        u = ensayo_tick();
+        u = ensayo_tick();                // u0 / u1 del comando 't'
         break;
     default: // PARADO / FALLA
         u = 0.0f;
@@ -265,7 +290,7 @@ static void tick_pid(void)
     if (modo == CTRL_FALLA) // por si la falla apareció durante este mismo tick
         u = 0.0f;
     u_actual = u;
-    pwm_set_porcentaje(u);
+    pwm_set_porcentaje(u); // % -> registro OCR1A del Timer1 (D9)
 
     if (log_on && (modo == CTRL_PID || modo == CTRL_MANUAL || modo == CTRL_ENSAYO))
         log_linea(ahora);
@@ -286,24 +311,26 @@ static void led_estado(void)
         set_bit(PORTB, LED_PIN);
 }
 
+// Se llama en cada vuelta del while(1) de main.cpp
 void control_tarea(void)
 {
-    if (vencio(&t_pid_prox, TS_PID_MS))
+    if (vencio(&t_pid_prox, TS_PID_MS)) // cada 20 ms: lazo de control
         tick_pid();
-    tarea_sensor();
+    tarea_sensor();                     // cada 2 ms: lectura del AS5600
     reportar_falla();
     led_estado();
 }
 
 //--------------API--------------//
+// Arranque: PID con las ganancias de config.h, inicia el AS5600 y (opcional) entra en PID
 void control_init(void)
 {
-    pid_init(&pid, KP_INICIAL, KI_INICIAL, KD_INICIAL, TS_PID_S, U_MIN, U_MAX);
+    pid_init(&pid, KP_INICIAL, KI_INICIAL, KD_INICIAL, TS_PID_S, U_MIN, U_MAX); // ganancias iniciales
     pid_set_filtro_d(&pid, PID_TF_S);
 
     UART_PRINT("# PID de velocidad - Nano + AS5600 + MOSFET D9\r\n");
     uint8_t e = 1;
-    for (uint8_t i = 0; i < 5 && e; i++)
+    for (uint8_t i = 0; i < 5 && e; i++) // hasta 5 intentos de encontrar el sensor
     {
         e = as5600_init();
         if (e)
@@ -321,11 +348,11 @@ void control_init(void)
         if (as5600_estado() & AS5600_MH)
             UART_PRINT("# AVISO: iman muy fuerte\r\n");
     }
-    pos_ant = as5600_posicion();
+    pos_ant = as5600_posicion();          // punto de partida para medir velocidad
     t_ant = tiempo_ms();
     t_pid_prox = t_ant + TS_PID_MS;
     t_sensor_prox = t_ant + TS_SENSOR_MS;
-    uart_set_espera(tarea_sensor);
+    uart_set_espera(tarea_sensor);        // el sensor se sigue leyendo mientras se imprime
     reportar_falla();
     UART_PRINT("# ? = ayuda, e = diagnostico del AS5600\r\n");
 #if ARRANQUE_EN_PID
@@ -334,44 +361,50 @@ void control_init(void)
 #endif
 }
 
+// Comando 'x' y botón: para el motor y borra la falla
 void control_parar(void)
 {
     errores_sensor = 0;
     sin_iman = 0;
     falla_pend = 0;
-    u_manual = 0.0f;
+    u_manual = 0.0f;  // el próximo 'm' arranca de cero
     u_actual = 0.0f;
-    pwm_set(0);
+    pwm_set(0);       // motor apagado
     entrar_modo(CTRL_PARADO);
 }
 
+// modo actual (lo usa el botón del encoder)
 ctrl_modo_t control_get_modo(void)
 {
     return modo;
 }
 
+// Comando 'g' y botón: PID ON
 uint8_t control_iniciar_pid(void)
 {
-    if (modo == CTRL_FALLA)
+    if (modo == CTRL_FALLA) // con falla hay que rearmar primero ('x')
         return 0;
     pid_reset(&pid, sp, pv, u_actual); // arranca sin salto
     entrar_modo(CTRL_PID);
     return 1;
 }
 
+// Comando 's' y encoder: CAMBIA EL SETPOINT
 uint8_t control_set_sp(float rpm)
 {
-    if (rpm < 0.0f || rpm > RPM_SP_MAX)
+    if (rpm < 0.0f || rpm > RPM_SP_MAX) // fuera de rango -> ERROR
         return 0;
     sp = rpm;
     return 1;
 }
 
+// setpoint actual [rpm]
 float control_get_sp(void)
 {
     return sp;
 }
 
+// Comando 'm <%>': CAMBIA u_manual y pasa a lazo abierto
 uint8_t control_manual(float pct)
 {
     if (modo == CTRL_FALLA || pct < U_MIN || pct > U_MAX)
@@ -382,6 +415,7 @@ uint8_t control_manual(float pct)
     return 1;
 }
 
+// Comando 't <u0> <u1>': arranca el ensayo al escalón
 uint8_t control_ensayo(float u0, float u1)
 {
     if (modo == CTRL_FALLA || u0 < U_MIN || u1 > U_MAX || u1 < U_MIN || u0 > U_MAX || u0 == u1)
@@ -397,11 +431,13 @@ uint8_t control_ensayo(float u0, float u1)
     return 1;
 }
 
+// Comandos 'p', 'i', 'd' y 'a': CAMBIAN pid.kp, pid.ki, pid.kd
 void control_set_ganancias(const ganancias_t *g)
 {
     pid_set_ganancias(&pid, g->kp, g->ki, g->kd);
 }
 
+// copia las ganancias en uso (para modificar una sola)
 void control_get_ganancias(ganancias_t *g)
 {
     g->kp = pid.kp;
@@ -409,43 +445,47 @@ void control_get_ganancias(ganancias_t *g)
     g->kd = pid.kd;
 }
 
+// Comando 'z <Ku> <Tu>': calcula ZN de lazo cerrado (no las aplica: "a k")
 void control_calcular_zn_cerrado(float ku, float tu)
 {
     sint_zn_cerrado(ku, tu, &sug_zc);
-    sug_ok |= 0x04;
+    sug_ok |= 0x04; // habilita "a k"
     UART_PRINT("# ZN cerrado: ");
     imprimir_gan(&sug_zc);
     UART_PRINT("# usar: a k\r\n");
 }
 
+// Comando 'a z|c|k': copia una sugerencia a pid.kp, pid.ki, pid.kd
 uint8_t control_aplicar_sugerencia(char tipo)
 {
     const ganancias_t *g = 0;
-    if (tipo == 'z' && (sug_ok & 0x01))
+    if (tipo == 'z' && (sug_ok & 0x01))      // ZN curva de reacción (de 't')
         g = &sug_zn;
-    else if (tipo == 'c' && (sug_ok & 0x02))
+    else if (tipo == 'c' && (sug_ok & 0x02)) // CHR 0 % sobreimpulso (de 't')
         g = &sug_chr;
-    else if (tipo == 'k' && (sug_ok & 0x04))
+    else if (tipo == 'k' && (sug_ok & 0x04)) // ZN lazo cerrado (de 'z')
         g = &sug_zc;
-    if (!g)
+    if (!g)                                  // no existe o no se calculó todavía
         return 0;
     control_set_ganancias(g);
     return 1;
 }
 
+// imprime un byte en hexadecimal: 0x36
 static void uart_put_hex8(uint8_t v)
 {
     const char *h = "0123456789ABCDEF";
     UART_PRINT("0x");
-    uart_putc(h[v >> 4]);
-    uart_putc(h[v & 0x0F]);
+    uart_putc(h[v >> 4]);   // nibble alto
+    uart_putc(h[v & 0x0F]); // nibble bajo
 }
 
-// Diagnóstico del sensor: busca dispositivos en el bus I2C y muestra el estado
+// Comando 'e'. Diagnóstico del sensor: busca dispositivos en el bus I2C y muestra el estado
 // del imán. Solo con el motor quieto (el barrido deja de leer el sensor un rato).
+// No cambia ninguna ganancia ni constante.
 uint8_t control_diagnostico(void)
 {
-    if (u_actual > 0.0f || fabsf(pv) > 30.0f)
+    if (u_actual > 0.0f || fabsf(pv) > 30.0f) // motor andando -> el comando responde ERROR
         return 0;
 
     // en reposo las dos líneas tienen que estar en 1 (pull-ups)
@@ -460,9 +500,9 @@ uint8_t control_diagnostico(void)
         UART_PRINT("# una linea esta en 0: corto a GND, sensor sin alimentacion o cable en otro pin\r\n");
 
     UART_PRINT("# I2C:");
-    uint8_t hay = 0, hay_as5600 = 0;
-    for (uint8_t d = 0x08; d < 0x78; d++)
-        if (i2c_probar(d) == 0)
+    uint8_t hay = 0, hay_as5600 = 0;  // algún dispositivo / el AS5600 en particular
+    for (uint8_t d = 0x08; d < 0x78; d++) // barre todas las direcciones válidas de 7 bits
+        if (i2c_probar(d) == 0)            // respondió con ACK: lo imprime
         {
             uart_putc(' ');
             uart_put_hex8(d);
@@ -484,8 +524,8 @@ uint8_t control_diagnostico(void)
         return 1;
     }
 
-    uint8_t agc;
-    uint16_t mag, ang;
+    uint8_t agc;       // ganancia automática del AS5600
+    uint16_t mag, ang; // magnitud del campo y ángulo crudo
     if (as5600_leer_diag(&agc, &mag, &ang))
     {
         UART_PRINT("# AS5600: responde a la direccion pero fallan las lecturas (ruido / pull-ups)\r\n");
@@ -516,12 +556,14 @@ uint8_t control_diagnostico(void)
     return 1;
 }
 
+// Comando 'l': prende / apaga el log CSV
 uint8_t control_log_toggle(void)
 {
     log_on = !log_on;
     return log_on;
 }
 
+// Comando '?' y después de 'p', 'i', 'd', 'a': imprime el estado y las ganancias en uso
 void control_estado(void)
 {
     UART_PRINT("# modo=");
