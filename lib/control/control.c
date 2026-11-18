@@ -7,6 +7,7 @@
 //   u_manual                  <- 'm'
 //   modo                      <- 'g', 'x', 'm', 't' y el botón del encoder
 //   log_on                    <- 'l'
+//   log_periodo               <- 'l <ms>'
 //   ens.u0 / ens.u1           <- 't'
 // El comando 'e' (control_diagnostico) no cambia nada: solo muestra el estado del bus y del imán.
 //=======================================================================================================
@@ -51,7 +52,11 @@ static float sp = 0.0f,       // setpoint [rpm]          <- 's' y encoder
              pv = 0.0f,       // velocidad medida filtrada [rpm]
              u_actual = 0.0f, // salida aplicada al PWM [%]
              u_manual = 0.0f; // salida del modo manual [%] <- 'm'
-static uint8_t log_on = 1;            // 1 = imprime el CSV t_ms,sp,rpm,u_pct <- 'l'
+static uint8_t log_on = 1;            // 1 = imprime el log t_ms, sp, rpm, u_pct <- 'l'
+static uint16_t log_periodo = LOG_PERIODO_MS; // una línea cada tantos ms <- 'l <ms>'
+static uint32_t t_log_prox;           // próxima línea del log [ms]
+static uint8_t log_lineas = 0;        // líneas impresas desde el último encabezado
+static uint8_t log_pide_encab = 1;    // 1 = imprimir el encabezado antes de la próxima línea
 static uint8_t errores_sensor = 0;    // errores I2C seguidos
 static uint8_t sin_iman = 0;          // lecturas seguidas sin imán
 static const char *falla_pend = 0; // mensaje (en flash) pendiente de imprimir
@@ -91,13 +96,13 @@ static void imprimir_gan(const ganancias_t *g)
     UART_PRINT("\r\n");
 }
 
-// cambia de modo y, si el log está prendido, imprime el encabezado del CSV
+// cambia de modo; el log arranca de nuevo (t_ms = 0, encabezado y primera línea enseguida)
 static void entrar_modo(ctrl_modo_t m)
 {
     modo = m;
     t_inicio_log = tiempo_ms(); // la columna t_ms arranca en 0
-    if (log_on && (m == CTRL_PID || m == CTRL_MANUAL || m == CTRL_ENSAYO))
-        UART_PRINT("t_ms   -   sp   -   rpm  -  u_pct\r\n");
+    t_log_prox = t_inicio_log;  // la primera línea sale en el próximo tick
+    log_pide_encab = 1;
 }
 
 // Apaga el motor en el acto. El mensaje se imprime después, desde control_tarea():
@@ -163,17 +168,35 @@ static void chequear_iman(void)
         declarar_falla(PSTR("se perdio el iman del AS5600"));
 }
 
-// una línea del CSV: t_ms,sp,rpm,u_pct
+// Formato del log: columnas de ancho fijo separadas por espacios, por ejemplo
+//        t_ms         sp        rpm      u_pct
+//       18797      720.0      236.2      100.0
+// (para pasarlo a Excel / Python: separar por espacios; las líneas con letras son encabezados)
+#define LOG_ANCHO 10 // [FIJO] caracteres por columna
+#define LOG_SEP "  " // [FIJO] separación entre columnas
+
+static void log_encabezado(void)
+{
+    // cada título ocupa LOG_ANCHO caracteres, alineado a la derecha como los números
+    UART_PRINT("\r\n      t_ms" LOG_SEP "        sp" LOG_SEP "       rpm" LOG_SEP "     u_pct\r\n");
+    log_lineas = 0;
+    log_pide_encab = 0;
+}
+
+// una línea del log: t_ms, sp, rpm, u_pct
 static void log_linea(uint32_t ahora)
 {
-    uart_put_i((int32_t)(ahora - t_inicio_log)); // t_ms desde que se entró al modo
-    uart_putc(',');
-    uart_put_f(modo == CTRL_PID ? sp : 0.0f, 1); // sp (solo tiene sentido en PID)
-    uart_putc(',');
-    uart_put_f(pv, 1);                           // rpm medidas
-    uart_putc(',');
-    uart_put_f(u_actual, 1);                     // % de PWM aplicado
+    if (log_pide_encab || (LOG_ENCABEZADO_CADA && log_lineas >= LOG_ENCABEZADO_CADA))
+        log_encabezado(); // al cambiar de modo y cada LOG_ENCABEZADO_CADA líneas
+    uart_put_i_ancho((int32_t)(ahora - t_inicio_log), LOG_ANCHO); // t_ms desde que se entró al modo
+    UART_PRINT(LOG_SEP);
+    uart_put_f_ancho(modo == CTRL_PID ? sp : 0.0f, LOG_ANCHO, 1); // sp (solo tiene sentido en PID)
+    UART_PRINT(LOG_SEP);
+    uart_put_f_ancho(pv, LOG_ANCHO, 1);                           // rpm medidas
+    UART_PRINT(LOG_SEP);
+    uart_put_f_ancho(u_actual, LOG_ANCHO, 1);                     // % de PWM aplicado
     UART_PRINT("\r\n");
+    log_lineas++;
 }
 
 //------------ENSAYO------------//
@@ -292,7 +315,9 @@ static void tick_pid(void)
     u_actual = u;
     pwm_set_porcentaje(u); // % -> registro OCR1A del Timer1 (D9)
 
-    if (log_on && (modo == CTRL_PID || modo == CTRL_MANUAL || modo == CTRL_ENSAYO))
+    // el control corre cada 20 ms, pero el log solo imprime una línea cada log_periodo ms
+    if (log_on && (modo == CTRL_PID || modo == CTRL_MANUAL || modo == CTRL_ENSAYO) &&
+        vencio(&t_log_prox, log_periodo))
         log_linea(ahora);
 }
 
@@ -556,11 +581,26 @@ uint8_t control_diagnostico(void)
     return 1;
 }
 
-// Comando 'l': prende / apaga el log CSV
+// Comando 'l': prende / apaga el log
 uint8_t control_log_toggle(void)
 {
     log_on = !log_on;
+    log_pide_encab = 1; // al volver a prenderlo, primero el encabezado
     return log_on;
+}
+
+// Comando 'l <ms>': CAMBIA log_periodo (redondeado a múltiplo de TS_PID_MS) y prende el log.
+// Devuelve el período que quedó [ms].
+uint16_t control_log_periodo(uint16_t ms)
+{
+    ms = (uint16_t)((ms + TS_PID_MS / 2) / TS_PID_MS * TS_PID_MS); // el log sale en los ticks del PID
+    if (ms < TS_PID_MS)
+        ms = TS_PID_MS;
+    log_periodo = ms;
+    log_on = 1;
+    log_pide_encab = 1;
+    t_log_prox = tiempo_ms(); // la próxima línea sale enseguida
+    return ms;
 }
 
 // Comando '?' y después de 'p', 'i', 'd', 'a': imprime el estado y las ganancias en uso
@@ -578,4 +618,9 @@ void control_estado(void)
     ganancias_t g;
     control_get_ganancias(&g);
     imprimir_gan(&g);
+    UART_PRINT("# log ");                                 // estado del log ('l' / 'l <ms>')
+    log_on ? UART_PRINT("ON") : UART_PRINT("OFF");
+    UART_PRINT(", una linea cada ");
+    uart_put_i(log_periodo);
+    UART_PRINT(" ms\r\n");
 }

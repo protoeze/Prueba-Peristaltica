@@ -16,7 +16,8 @@
 //
 // Qué cambia cada comando del puerto serie (tabla completa al principio de lib/comandos/comandos.c):
 //   p <v>  Kp   i <v>  Ki   d <v>  Kd        (valores iniciales KP/KI/KD_INICIAL en config.h)
-//   s <rpm> setpoint   m <%> salida manual   g PID ON   x parar   l log   ? estado
+//   s <rpm> setpoint   m <%> salida manual   g PID ON   x parar   l log ON/OFF   ? estado
+//   l <ms> una línea del log cada <ms> (inicial LOG_PERIODO_MS = 500 ms; 20 = todas)
 //   e diagnóstico del AS5600 (con el motor quieto)
 // Lo cambiado por serie NO se guarda: al resetear vuelve a lo que dice config.h.
 // En config.h, [SERIE: x] = se puede cambiar con el comando x; [FIJO] = solo recompilando.
@@ -24,7 +25,7 @@
 // Sintonía (punto 3 de la consigna):
 //   1) t <u0> <u1>  -> ensayo al escalón: K, tau, theta + ZN y CHR  (a z | a c)
 //   2) o ZN lazo cerrado: i 0, d 0, subir p hasta oscilar -> z <Ku> <Tu> (a k)
-//   3) ajuste fino manual con p / i / d mientras se mira el log (t_ms,sp,rpm,u_pct)
+//   3) ajuste fino manual con p / i / d mientras se mira el log (t_ms, sp, rpm, u_pct)
 // Requiere timer.c / timer.h (los tuyos; "tiempo" pasó a ser volatile).
 int main() // reemplaza al main() de Arduino: no hay setup()/loop()
 {

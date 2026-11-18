@@ -37,6 +37,7 @@ void control_get_ganancias(ganancias_t *g);
 void control_calcular_zn_cerrado(float ku, float tu); // sugerencia ZN  <- 'z'
 uint8_t control_aplicar_sugerencia(char tipo); // 'z', 'c' o 'k'        <- 'a'
 uint8_t control_log_toggle(void);                     // log ON / OFF   <- 'l'
+uint16_t control_log_periodo(uint16_t ms);            // período del log <- 'l <ms>'
 uint8_t control_diagnostico(void); // 0 si el motor está girando          <- 'e'
 void control_estado(void);                            // imprime estado <- '?'
 

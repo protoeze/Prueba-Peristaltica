@@ -22,6 +22,9 @@ void uart_puts(const char *s);    // string en RAM
 void uart_puts_P(const char *s); // string en flash
 void uart_put_i(int32_t v);       // número entero
 void uart_put_f(float v, uint8_t decimales); // número con decimales
+// lo mismo, pero ocupando al menos 'ancho' caracteres (alineado a la derecha): columnas parejas
+void uart_put_i_ancho(int32_t v, uint8_t ancho);
+void uart_put_f_ancho(float v, uint8_t ancho, uint8_t decimales);
 int16_t uart_getc(void); // -1 si no hay datos
 // función que se llama mientras uart_putc espera lugar en el buffer
 void uart_set_espera(void (*f)(void));

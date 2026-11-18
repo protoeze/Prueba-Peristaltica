@@ -5,6 +5,7 @@
 
 #include "uart.h"
 #include <stdlib.h> // ltoa(), dtostrf()
+#include <string.h> // strlen()
 
 #define TX_SIZE 256 // potencias de 2 (máx. 256: índices de 8 bits)
 #define RX_SIZE 32  // alcanza para un comando (LINEA_MAX = 32)
@@ -88,14 +89,26 @@ void uart_puts_P(const char *s)
         uart_putc(c);
 }
 
-void uart_put_i(int32_t v)
+// imprime el texto b precedido de los espacios que falten para ocupar 'ancho' caracteres
+static void uart_puts_ancho(const char *b, uint8_t ancho)
 {
-    char b[14];
-    ltoa(v, b, 10); // entero -> texto en base 10
+    uint8_t n = (uint8_t)strlen(b);
+    while (n < ancho) // relleno a la izquierda: el número queda alineado a la derecha
+    {
+        uart_putc(' ');
+        n++;
+    }
     uart_puts(b);
 }
 
-void uart_put_f(float v, uint8_t decimales)
+void uart_put_i_ancho(int32_t v, uint8_t ancho)
+{
+    char b[14];
+    ltoa(v, b, 10); // entero -> texto en base 10
+    uart_puts_ancho(b, ancho);
+}
+
+void uart_put_f_ancho(float v, uint8_t ancho, uint8_t decimales)
 {
     char b[16];
     if (v > 99999.0f) // límite para que entre en el buffer
@@ -103,8 +116,11 @@ void uart_put_f(float v, uint8_t decimales)
     if (v < -99999.0f)
         v = -99999.0f;
     dtostrf(v, 1, decimales, b); // float -> texto
-    uart_puts(b);
+    uart_puts_ancho(b, ancho);
 }
+
+void uart_put_i(int32_t v) { uart_put_i_ancho(v, 0); }                         // sin relleno
+void uart_put_f(float v, uint8_t decimales) { uart_put_f_ancho(v, 0, decimales); } // sin relleno
 
 // devuelve el próximo byte recibido o -1 si no hay nada
 int16_t uart_getc(void)

@@ -4,7 +4,7 @@
 // Terminal: 115200 baud, 8N1. Cada comando es UNA línea que termina en Enter (\r o \n).
 // Mayúsculas o minúsculas da igual. Se acepta coma o punto decimal ("p 0,05" = "p 0.05").
 // Respuestas: "# OK", "# ERROR" o el estado actual. Las líneas que empiezan con '#' son
-// comentarios; el resto es el log CSV: t_ms,sp,rpm,u_pct
+// comentarios; el resto es el log en columnas: t_ms, sp, rpm, u_pct
 //
 // ¿QUÉ CAMBIA CADA COMANDO?  (variable que modifica -> dónde vive -> rango / unidades)
 // ---------------------------------------------------------------------------------------------------
@@ -24,7 +24,10 @@
 //               calcula ganancias sugeridas (ZN y CHR) pero NO las aplica: usar "a z" o "a c".
 //  z <Ku> <Tu>  calcula ganancias ZN de lazo cerrado (Ku [%/rpm], Tu [s]); NO las aplica: "a k".
 //  a z|c|k      copia las ganancias sugeridas a pid.kp / pid.ki / pid.kd
-//  l            log_on (control.c): prende / apaga el log CSV
+//  l            log_on (control.c): prende / apaga el log
+//  l <ms>       log_periodo (control.c): una línea del log cada <ms>  20 .. 60000 [ms]
+//               Ej: "l 1000" = una por segundo; "l 20" = todas (para ver oscilaciones rápidas).
+//               Solo cambia lo que se imprime: el PID sigue calculando cada 20 ms. Inicial: LOG_PERIODO_MS
 //  e            no cambia nada: diagnóstico del AS5600 (niveles de SDA/SCL, barrido del bus I2C,
 //               estado del imán). Solo con el motor quieto, si no responde ERROR (usar 'x').
 //  encoder      girar = cambia sp (igual que 's'); pasos ENC_PASO_RPM / ENC_PASO_RAPIDO_RPM
@@ -62,6 +65,7 @@ static void ayuda(void)
     UART_PRINT("# z <Ku> <Tu>  Ziegler-Nichols lazo cerrado\r\n");
     UART_PRINT("# a <z|c|k>    aplicar ganancias sugeridas\r\n");
     UART_PRINT("# l            log ON/OFF\r\n");
+    UART_PRINT("# l <ms>       log: una linea cada <ms> (20 = todas)\r\n");
     UART_PRINT("# e            diagnostico del AS5600 (motor quieto)\r\n");
     UART_PRINT("# encoder      girar = setpoint (rapido = pasos grandes)\r\n");
     UART_PRINT("# boton enc.   PID ON / parar (con falla: rearma)\r\n");
@@ -181,9 +185,21 @@ static void ejecutar(char *l)
             UART_PRINT("# ERROR: parar el motor primero (x)\r\n");
         break;
 
-    // --- l: LOG CSV ON / OFF (log_on en control.c) ---
+    // --- l: LOG ON / OFF (log_on) o PERÍODO DEL LOG (log_periodo), en control.c ---
     case 'l':
-        control_log_toggle() ? UART_PRINT("# log ON\r\n") : UART_PRINT("# log OFF\r\n");
+        if (leer_f(&arg, &a)) // 'l <ms>': CAMBIA el período del log (log_periodo) y lo prende
+        {
+            if (a < TS_PID_MS || a > 60000.0f) // entre 20 ms (todas las líneas) y 1 minuto
+            {
+                err();
+                break;
+            }
+            UART_PRINT("# log ON, una linea cada ");
+            uart_put_i(control_log_periodo((uint16_t)(a + 0.5f)));
+            UART_PRINT(" ms\r\n");
+        }
+        else // 'l' solo: prende / apaga
+            control_log_toggle() ? UART_PRINT("# log ON\r\n") : UART_PRINT("# log OFF\r\n");
         break;
 
     default: // cualquier otra letra

@@ -17,7 +17,8 @@
 //   m <%>   salida manual          -> u_manual (control.c)   U_MIN .. U_MAX (lazo abierto)
 //   a z|c|k aplica ganancias sugeridas por 't' o 'z' -> pid.kp/ki/kd
 //   g / x   PID ON / parar (también el botón del encoder)
-//   t, z, l, ?  ensayo, Ziegler-Nichols, log, ayuda (no cambian constantes por sí solos)
+//   l <ms>  una línea del log cada <ms> -> log_periodo (control.c)  valor inicial LOG_PERIODO_MS
+//   t, z, l, ?  ensayo, Ziegler-Nichols, log ON/OFF, ayuda (no cambian constantes por sí solos)
 //   e           diagnóstico del AS5600 / bus I2C (no cambia nada; con el motor quieto)
 //=======================================================================================================
 
@@ -65,6 +66,12 @@ extern "C" { // main.cpp es C++ y el resto es C: así los nombres se enlazan bie
 #define ENC_T_RAPIDO_MS 40           // pasos más seguidos que esto = giro rápido [ms]
 #define ENC_T_AVISO_MS 250           // como mucho un "# sp=..." cada este tiempo [ms]
 #define ENC_BTN_ANTIRREBOTE_MS 30    // el botón tiene que quedar estable este tiempo [ms]
+
+//------------LOG------------//
+// El lazo calcula cada TS_PID_MS (20 ms), pero imprimir 50 líneas por segundo no se puede leer:
+// el log muestra una línea cada LOG_PERIODO_MS. No afecta al control ni al ensayo 't'.
+#define LOG_PERIODO_MS 500     // [SERIE: l <ms>] una línea del log cada tantos ms (20 = todas, máx. 60000)
+#define LOG_ENCABEZADO_CADA 20 // [FIJO] repite el encabezado cada tantas líneas (0 = solo al cambiar de modo)
 
 //----------ARRANQUE---------// [FIJO]
 // 1 = al encender queda en lazo cerrado con sp = 0: el motor arranca al girar el
